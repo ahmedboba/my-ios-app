@@ -15,7 +15,7 @@ import 'package:latlong2/latlong.dart';
 
 const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://192.168.1.136:5000',
+  defaultValue: 'http://100.100.59.86:5000',
 );
 void main() => runApp(const DriverApp());
 

@@ -12,6 +12,11 @@
 	<string>يحتاج التطبيق إلى الصور لإرفاق صورة التوثيق عند الحاجة.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>يستخدم التطبيق الموقع لعرض حركة السائق في لوحة التحكم أثناء التوصيل.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
