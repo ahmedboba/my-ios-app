@@ -9,7 +9,7 @@ jobs:
   build-ios:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -19,6 +19,11 @@ jobs:
       
       - name: Install dependencies
         run: flutter pub get
+      
+      - name: Fix Podfile path issue
+        run: |
+          rm -f ios/Flutter/Generated.xcconfig
+          flutter pub get
       
       - name: Install CocoaPods
         run: |
