@@ -31,11 +31,20 @@ jobs:
           pod install
           cd ..
       
-      - name: Build iOS IPA
-        run: flutter build ipa --release --no-codesign
+      - name: Build iOS App (no codesign)
+        run: flutter build ios --release --no-codesign
+      
+      - name: Create IPA from .app
+        run: |
+          mkdir -p build/ios/ipa
+          mkdir -p build/ios/ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/ipa/Payload/
+          cd build/ios/ipa
+          zip -r Runner.ipa Payload
+          rm -rf Payload
       
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa
-          path: build/ios/ipa/*.ipa
+          path: build/ios/ipa/Runner.ipa
