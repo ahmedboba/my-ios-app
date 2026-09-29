@@ -343,6 +343,7 @@ class _HomePageState extends State<HomePage> {
   Map<String, PaymentStyle> paymentStyles = {};
   String companyName = '';
   double? currentLatitude, currentLongitude;
+  int? activeOrderId;
   bool loading = false;
   Timer? locationTimer;
   Timer? orderRefreshTimer;
@@ -360,7 +361,7 @@ class _HomePageState extends State<HomePage> {
         const Duration(seconds: 30), (_) => sendPresenceAndLocation());
     // مزامنة قائمة السائق تلقائياً حتى تظهر إزالة الطلب من سطح المكتب دون زر تحديث.
     orderRefreshTimer = Timer.periodic(
-        const Duration(seconds: 10), (_) async {
+        const Duration(seconds: 3), (_) async {
           final count = await api.flushOfflineQueue();
           if (count > 0 && mounted) _snack('تمت مزامنة $count عملية');
           await loadOrders(silent: true);
@@ -393,6 +394,7 @@ class _HomePageState extends State<HomePage> {
         'latitude': position.latitude,
         'longitude': position.longitude,
         'accuracy': position.accuracy,
+        if (activeOrderId != null) 'orderId': activeOrderId,
       });
     } catch (_) {}
   }
@@ -617,6 +619,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> openClientAddress(Map o) async {
     final id = int.tryParse('${o['ID']}');
+    activeOrderId = id;
     final status = '${o['OrderStatus'] ?? ''}';
     if (id != null && status != 'تم التسليم' && status != 'ملغى') {
       try {
@@ -671,6 +674,7 @@ class _HomePageState extends State<HomePage> {
                   onCustomerIssue: reportCustomerIssue,
                   onOpenAddress: openClientAddress,
                   onReopen: reopenOrder,
+                  onReturnRequest: requestReturn,
                 ))).then((_) => loadOrders());
   }
 
@@ -682,6 +686,26 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       _snack(e.toString());
     }
+  }
+
+  Future<void> requestReturn(int id) async {
+    final c = TextEditingController();
+    final reason = await showDialog<String>(
+        context: context,
+        builder: (_) => AlertDialog(
+              title: const Text('طلب إرجاع للمراجعة'),
+              content: TextField(controller: c, maxLines: 3, decoration: const InputDecoration(labelText: 'سبب الإرجاع')),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+                FilledButton(onPressed: () => Navigator.pop(context, c.text.trim()), child: const Text('إرسال'))
+              ],
+            ));
+    if (reason == null || reason.isEmpty) return;
+    try {
+      await api.post('/api/driver/orders/$id/return-request', body: {'reason': reason});
+      _snack('تم إرسال طلب الإرجاع للمراجعة');
+      await loadOrders();
+    } catch (e) { _snack(e.toString()); }
   }
 
   Future<void> cancel(int id) async {
@@ -718,6 +742,7 @@ class _HomePageState extends State<HomePage> {
           onDefer: deferOrder,
           onOpen: openOrder,
           onReopen: reopenOrder,
+          onReturnRequest: requestReturn,
           paymentStyles: paymentStyles,
           onScan: scan,
           onManual: manualEntry),
@@ -1079,6 +1104,7 @@ class OrdersPage extends StatelessWidget {
   final Future<void> Function(int) onCancel, onDefer;
   final void Function(Map<String, dynamic>) onOpen;
   final Future<void> Function(int) onReopen;
+  final Future<void> Function(int) onReturnRequest;
   final VoidCallback onScan, onManual;
   const OrdersPage(
       {super.key,
@@ -1091,6 +1117,7 @@ class OrdersPage extends StatelessWidget {
       required this.onDefer,
       required this.onOpen,
       required this.onReopen,
+      required this.onReturnRequest,
       required this.onScan,
       required this.onManual});
   @override
@@ -1160,6 +1187,8 @@ class OrdersPage extends StatelessWidget {
                                       Text('${o['ClientAddress'] ?? ''}'),
                                       Text(
                                           'المبلغ: ${o['OrderAmount'] ?? 0} | الشحن: ${o['ShippingCost'] ?? 0}'),
+                                      if ('${o['ReceivedAt'] ?? ''}'.trim().isNotEmpty)
+                                        Text('تاريخ ووقت الاستلام: ${o['ReceivedAt']}'),
                                       Text(
                                           'طريقة الدفع: ${o['PaymentMethod'] ?? 'غير محددة'}',
                                           style: const TextStyle(
@@ -1225,6 +1254,7 @@ class OrderDetailsPage extends StatelessWidget {
   final Future<void> Function(int) onCustomerIssue;
   final Future<void> Function(Map) onOpenAddress;
   final Future<void> Function(int) onReopen;
+  final Future<void> Function(int) onReturnRequest;
 
   const OrderDetailsPage({
     super.key,
@@ -1237,6 +1267,7 @@ class OrderDetailsPage extends StatelessWidget {
     required this.onCustomerIssue,
     required this.onOpenAddress,
     required this.onReopen,
+    required this.onReturnRequest,
   });
 
   @override
@@ -1301,6 +1332,12 @@ class OrderDetailsPage extends StatelessWidget {
                 onPressed: () => onCustomerIssue(id),
                 icon: const Icon(Icons.report_problem_outlined),
                 label: const Text('توثيق حالة العميل')),
+            OutlinedButton.icon(
+                onPressed: () => onReturnRequest(id),
+                icon: const Icon(Icons.assignment_return),
+                label: Text('${order['ReturnRequestStatus'] ?? ''}' == 'Pending'
+                    ? 'الإرجاع قيد مراجعة الإدارة'
+                    : 'طلب إرجاع للمراجعة')),
             TextButton.icon(
                 onPressed: () => onCancel(id),
                 icon: const Icon(Icons.cancel, color: Colors.red),
@@ -1365,7 +1402,7 @@ class _OperationsPageState extends State<OperationsPage> {
                                 child: Icon(Icons.assignment)),
                             title: Text('${o['OperationNumber'] ?? ''}'),
                             subtitle: Text(
-                                '${o['DriverName'] ?? ''} | ${o['ShippingCompany'] ?? ''}\nعدد الطلبات: ${o['OrdersCount'] ?? 0}'),
+                                '${o['DriverName'] ?? ''} | ${o['ShippingCompany'] ?? ''}\nعدد الطلبات: ${o['OrdersCount'] ?? 0}\nالاستلام: ${o['DeliveryDate'] ?? o['CreatedAt'] ?? ''}'),
                             children: details.isEmpty
                                 ? [
                                     const ListTile(
@@ -1424,16 +1461,33 @@ class ClientMapPage extends StatelessWidget {
   }
 }
 
-class ScanPage extends StatelessWidget {
+class ScanPage extends StatefulWidget {
   const ScanPage({super.key});
+  @override
+  State<ScanPage> createState() => _ScanPageState();
+}
+
+class _ScanPageState extends State<ScanPage> {
+  final MobileScannerController controller = MobileScannerController();
+  bool handled = false;
+
+  @override
+  void dispose() { controller.dispose(); super.dispose(); }
+
   @override
   Widget build(BuildContext context) => Scaffold(
       appBar: AppBar(title: const Text('مسح باركود الطلب')),
       body: MobileScanner(
+          controller: controller,
           onDetect: (capture) {
+            if (handled) return;
             if (capture.barcodes.isNotEmpty) {
               final code = capture.barcodes.first.rawValue;
-              if (code != null && code.isNotEmpty) Navigator.pop(context, code);
+              if (code != null && code.isNotEmpty) {
+                handled = true;
+                controller.stop();
+                Navigator.pop(context, code.trim());
+              }
             }
           },
           overlayBuilder: (context, constraints) => Center(
