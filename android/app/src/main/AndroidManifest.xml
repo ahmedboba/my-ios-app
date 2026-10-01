@@ -5,7 +5,7 @@
     <application
         android:label="Ordrat Online"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@drawable/ordrat_icon"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"

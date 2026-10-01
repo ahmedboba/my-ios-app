@@ -346,7 +346,6 @@ class _HomePageState extends State<HomePage> {
   int? activeOrderId;
   bool loading = false;
   Timer? locationTimer;
-  Timer? orderRefreshTimer;
   @override
   void initState() {
     super.initState();
@@ -359,13 +358,6 @@ class _HomePageState extends State<HomePage> {
     });
     locationTimer = Timer.periodic(
         const Duration(seconds: 30), (_) => sendPresenceAndLocation());
-    // مزامنة قائمة السائق تلقائياً حتى تظهر إزالة الطلب من سطح المكتب دون زر تحديث.
-    orderRefreshTimer = Timer.periodic(
-        const Duration(seconds: 3), (_) async {
-          final count = await api.flushOfflineQueue();
-          if (count > 0 && mounted) _snack('تمت مزامنة $count عملية');
-          await loadOrders(silent: true);
-        });
     sendPresenceAndLocation();
   }
 
@@ -402,7 +394,6 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     locationTimer?.cancel();
-    orderRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -569,6 +560,19 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> quickDelivered(int id, String method) async {
+    try {
+      await api.post('/api/driver/orders/$id/delivered', body: {
+        'paymentMethod': method,
+        'paymentNote': 'تم التسليم من الزر السريع'
+      });
+      _snack('تم تسجيل التسليم ($method)');
+      await loadOrders();
+    } catch (e) {
+      _snack(e.toString());
+    }
+  }
+
   Future<void> deferOrder(int id) async {
     final c = TextEditingController();
     final reason = await showDialog<String>(
@@ -669,6 +673,7 @@ class _HomePageState extends State<HomePage> {
                   methods: paymentMethodsFromDb,
                   paymentStyles: paymentStyles,
                   onDelivered: delivered,
+                  onQuickDelivered: quickDelivered,
                   onCancel: cancel,
                   onDefer: deferOrder,
                   onCustomerIssue: reportCustomerIssue,
@@ -738,6 +743,7 @@ class _HomePageState extends State<HomePage> {
           loading: loading,
           onRefresh: loadOrders,
           onDelivered: delivered,
+          onQuickDelivered: quickDelivered,
           onCancel: cancel,
           onDefer: deferOrder,
           onOpen: openOrder,
@@ -913,7 +919,7 @@ class _DashboardPageState extends State<DashboardPage> {
           ? const Center(child: CircularProgressIndicator())
           : ListView(padding: const EdgeInsets.all(12), children: [
               Card(
-                  color: const Color(0xFFE4002B),
+                          color: const Color(0xFFE4002B),
                   child: Padding(
                       padding: const EdgeInsets.all(18),
                       child: Row(children: [
@@ -1095,12 +1101,13 @@ class _ReceivePageState extends State<ReceivePage> {
       ]));
 }
 
-class OrdersPage extends StatelessWidget {
+class OrdersPage extends StatefulWidget {
   final List<dynamic> orders;
   final Map<String, PaymentStyle> paymentStyles;
   final bool loading;
   final Future<void> Function() onRefresh;
   final Future<void> Function(int, String?) onDelivered;
+  final Future<void> Function(int, String) onQuickDelivered;
   final Future<void> Function(int) onCancel, onDefer;
   final void Function(Map<String, dynamic>) onOpen;
   final Future<void> Function(int) onReopen;
@@ -1113,6 +1120,7 @@ class OrdersPage extends StatelessWidget {
       required this.loading,
       required this.onRefresh,
       required this.onDelivered,
+      required this.onQuickDelivered,
       required this.onCancel,
       required this.onDefer,
       required this.onOpen,
@@ -1121,19 +1129,24 @@ class OrdersPage extends StatelessWidget {
       required this.onScan,
       required this.onManual});
   @override
+  State<OrdersPage> createState() => _OrdersPageState();
+}
+
+class _OrdersPageState extends State<OrdersPage> {
+  @override
   Widget build(BuildContext context) {
-    final ready = orders
+    final ready = widget.orders
         .where((raw) => '${raw['OrderStatus'] ?? ''}' == 'مع السائق')
         .toList();
-    final completed = orders.where((raw) {
+    final completed = widget.orders.where((raw) {
       final s = '${raw['OrderStatus'] ?? ''}';
       return s == 'تم التسليم' || s == 'ملغى' || s == 'ملغي' || s == 'مؤجل';
     }).toList();
 
     Widget orderList(List<dynamic> source, {required bool actions}) {
       return RefreshIndicator(
-        onRefresh: onRefresh,
-        child: loading
+        onRefresh: widget.onRefresh,
+        child: widget.loading
             ? const Center(child: CircularProgressIndicator())
             : ListView(
                 padding: const EdgeInsets.all(12),
@@ -1142,13 +1155,13 @@ class OrdersPage extends StatelessWidget {
                     Row(children: [
                       Expanded(
                           child: FilledButton.icon(
-                              onPressed: onScan,
+                              onPressed: widget.onScan,
                               icon: const Icon(Icons.qr_code_scanner),
                               label: const Text('إضافة بالباركود'))),
                       const SizedBox(width: 8),
                       Expanded(
                           child: OutlinedButton.icon(
-                              onPressed: onManual,
+                              onPressed: widget.onManual,
                               icon: const Icon(Icons.keyboard),
                               label: const Text('برقم الطلب')))
                     ]),
@@ -1164,7 +1177,7 @@ class OrdersPage extends StatelessWidget {
                     return Card(
                         clipBehavior: Clip.antiAlias,
                         child: InkWell(
-                            onTap: () => onOpen(o),
+                            onTap: () => widget.onOpen(o),
                             child: Padding(
                                 padding: const EdgeInsets.all(12),
                                 child: Column(
@@ -1175,7 +1188,7 @@ class OrdersPage extends StatelessWidget {
                                           alignment: Alignment.centerLeft,
                                           child: paymentBadge(
                                               '${o['PaymentMethod'] ?? ''}',
-                                              paymentStyles)),
+                                              widget.paymentStyles)),
                                       const SizedBox(height: 8),
                                       Text('طلب ${o['OrderNumber']}',
                                           style: const TextStyle(
@@ -1203,7 +1216,7 @@ class OrdersPage extends StatelessWidget {
                                         Align(
                                             alignment: Alignment.centerLeft,
                                             child: TextButton(
-                                                onPressed: () => onOpen(o),
+                                                onPressed: () => widget.onOpen(o),
                                                 child: const Text(
                                                     'بدء عملية التسليم')))
                                       else if (status == 'تم التسليم' ||
@@ -1213,7 +1226,7 @@ class OrdersPage extends StatelessWidget {
                                         Align(
                                             alignment: Alignment.centerLeft,
                                             child: OutlinedButton.icon(
-                                                onPressed: () => onReopen(
+                                                onPressed: () => widget.onReopen(
                                                     int.parse('${o['ID']}')),
                                                 icon: const Icon(Icons.undo),
                                                 label: const Text(
@@ -1250,6 +1263,7 @@ class OrderDetailsPage extends StatelessWidget {
   final List<String> methods;
   final Map<String, PaymentStyle> paymentStyles;
   final Future<void> Function(int, String?) onDelivered;
+  final Future<void> Function(int, String) onQuickDelivered;
   final Future<void> Function(int) onCancel, onDefer;
   final Future<void> Function(int) onCustomerIssue;
   final Future<void> Function(Map) onOpenAddress;
@@ -1262,6 +1276,7 @@ class OrderDetailsPage extends StatelessWidget {
     required this.methods,
     required this.paymentStyles,
     required this.onDelivered,
+    required this.onQuickDelivered,
     required this.onCancel,
     required this.onDefer,
     required this.onCustomerIssue,
@@ -1324,6 +1339,25 @@ class OrderDetailsPage extends StatelessWidget {
                     onDelivered(id, '${order['PaymentMethod'] ?? ''}'.trim()),
                 icon: const Icon(Icons.check_circle),
                 label: const Text('بدء عملية التسليم / تم التسليم')),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                  child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFFE4002B)),
+                      onPressed: () =>
+                          onQuickDelivered(id, 'الدفع عند الاستلام'),
+                      icon: const Icon(Icons.payments_outlined),
+                      label: const Text('تسليم كاش'))),
+              const SizedBox(width: 8),
+              Expanded(
+                  child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF2EBD85)),
+                      onPressed: () => onQuickDelivered(id, 'لينك'),
+                      icon: const Icon(Icons.link),
+                      label: const Text('تسليم لينك')))
+            ]),
             OutlinedButton.icon(
                 onPressed: () => onDefer(id),
                 icon: const Icon(Icons.schedule),
