@@ -70,10 +70,10 @@ class _DriverAppState extends State<DriverApp> {
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       theme: ThemeData(
           useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFE4002B)),
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF5E94FF)),
           scaffoldBackgroundColor: const Color(0xFFF5F5F5),
           appBarTheme: const AppBarTheme(
-              backgroundColor: Color(0xFFE4002B),
+              backgroundColor: Color(0xFF5E94FF),
               foregroundColor: Colors.white,
               centerTitle: false)),
       home: token == null
@@ -346,6 +346,10 @@ class _HomePageState extends State<HomePage> {
   int? activeOrderId;
   bool loading = false;
   Timer? locationTimer;
+  Timer? notificationTimer;
+  final List<Map<String, dynamic>> mobileNotifications = [];
+  final Set<String> notificationIds = {};
+  final Set<String> readNotificationIds = {};
   @override
   void initState() {
     super.initState();
@@ -359,6 +363,58 @@ class _HomePageState extends State<HomePage> {
     locationTimer = Timer.periodic(
         const Duration(seconds: 30), (_) => sendPresenceAndLocation());
     sendPresenceAndLocation();
+    loadReadNotifications();
+    notificationTimer = Timer.periodic(const Duration(seconds: 5), (_) => pollNotifications());
+    pollNotifications();
+  }
+
+  Future<void> loadReadNotifications() async {
+    final prefs = await SharedPreferences.getInstance();
+    readNotificationIds.addAll(prefs.getStringList('read_mobile_notifications') ?? const []);
+  }
+
+  Future<void> pollNotifications() async {
+    try {
+      final raw = await api.get('/api/driver/notifications');
+      final incoming = List<Map<String, dynamic>>.from(
+          List.from(raw).map((x) => Map<String, dynamic>.from(x as Map)));
+      final fresh = incoming.where((n) {
+        final id = '${n['NotificationID'] ?? ''}';
+        if (id.isEmpty || notificationIds.contains(id) || readNotificationIds.contains(id)) return false;
+        notificationIds.add(id);
+        return true;
+      }).toList();
+      if (fresh.isEmpty || !mounted) return;
+      setState(() => mobileNotifications.insertAll(0, fresh));
+      SystemSound.play(SystemSoundType.alert);
+      _snack('${fresh.first['Title']}: ${fresh.first['Message']}');
+    } catch (_) {}
+  }
+
+  Future<void> showNotifications() async {
+    final current = List<Map<String, dynamic>>.from(mobileNotifications);
+    if (current.isNotEmpty) {
+      setState(() => mobileNotifications.clear());
+      for (final n in current) {
+        final id = int.tryParse('${n['NotificationID']}');
+        if (id != null) {
+          readNotificationIds.add('$id');
+          try { await api.post('/api/driver/notifications/$id/read'); } catch (_) {}
+        }
+      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList('read_mobile_notifications', readNotificationIds.toList());
+    }
+    if (!mounted) return;
+    showModalBottomSheet<void>(
+        context: context, showDragHandle: true,
+        builder: (_) => SafeArea(child: SizedBox(height: 430,
+          child: current.isEmpty
+              ? const Center(child: Text('لا توجد إشعارات جديدة'))
+              : ListView(children: current.map((n) => ListTile(
+                  leading: const CircleAvatar(backgroundColor: Color(0xFF5E94FF), child: Icon(Icons.notifications_active, color: Colors.white)),
+                  title: Text('${n['Title'] ?? ''}'),
+                  subtitle: Text('${n['Message'] ?? ''}\n${n['CreatedAt'] ?? ''}'), isThreeLine: true)).toList()))));
   }
 
   Future<void> sendPresenceAndLocation() async {
@@ -394,6 +450,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     locationTimer?.cancel();
+    notificationTimer?.cancel();
     super.dispose();
   }
 
@@ -770,6 +827,11 @@ class _HomePageState extends State<HomePage> {
                                 ? 'التقارير'
                                 : 'التسديدات'),
             actions: [
+              Stack(children: [
+                IconButton(tooltip: 'الإشعارات', onPressed: showNotifications, icon: const Icon(Icons.notifications_outlined)),
+                if (mobileNotifications.isNotEmpty)
+                  Positioned(right: 5, top: 5, child: Container(padding: const EdgeInsets.all(3), decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle), child: Text('${mobileNotifications.length}', style: const TextStyle(color: Colors.white, fontSize: 9))))
+              ]),
               IconButton(
                   onPressed: widget.onLogout, icon: const Icon(Icons.logout))
             ]),
